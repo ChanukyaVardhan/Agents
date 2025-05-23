@@ -1,12 +1,13 @@
 from state import GlobalState
 from dotenv import load_dotenv
 from langchain_community.tools import DuckDuckGoSearchResults
+from llm import LLMClient
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Optional
 from utils import write_to_file
 from utils import logger
 import json
-import llm
+import os
 
 
 PROMPT = """
@@ -43,7 +44,7 @@ Your output must be a JSON object with the following structure. Make sure it is 
 """
 
 class Message(BaseModel):
-    role: str = Field(..., description="The role of the message sender.")
+    role: str = Field(..., description="The role of the message sender (e.g., 'user', 'assistant').")
     content: str = Field(..., description="The content of the message.")
 
 
@@ -51,6 +52,7 @@ class SummarizerAgent:
     def __init__(self, output_trace_path: str):
         self.template = self.load_template()
         self.output_trace_path = output_trace_path
+        self.llm_client = LLMClient()
 
     def load_template(self) -> str:
         return PROMPT
@@ -58,21 +60,23 @@ class SummarizerAgent:
     def trace(self, role: str, content: str) -> None:
         write_to_file(path=self.output_trace_path, content=f"{role}: {content}\n")
 
-    def ask_llm(self, prompt: str) -> str:
+    def ask_llm(self, prompt: str) -> Optional[str]:
         self.trace("user", prompt)
 
         contents = [Message(role='user', content=prompt)]
-        response = llm.response(contents)
+        response = self.llm_client.get_response(contents)
 
-        return str(response) if response else "No response from LLM"
+        return response
 
     def build_prompt(self, state: GlobalState) -> str:
         event_name = state.current_event.name
         event_date = state.current_event.date
 
         search_summary = "# Articles\n"
+        counter = 0
         for scraped_result in state.current_event.search_query_results:
             if scraped_result.is_top_result:
+                search_summary += f"## Article {counter+1}:\n"
                 search_summary += f"- *Title*: {scraped_result.title}\n"
                 search_summary += f"- *Link*: {scraped_result.link}\n"
                 search_summary += f"- *Snippet*: {scraped_result.snippet}\n"
@@ -81,6 +85,8 @@ class SummarizerAgent:
                 else:
                     search_summary += f"- *Scraped Content*: Could not scrape any content from this page.\n"
                 search_summary += "\n\n"
+
+                counter += 1
 
         return self.template.format(
             event_name=event_name,
@@ -93,7 +99,7 @@ class SummarizerAgent:
         try:
             cleaned_response = response.strip().strip('`').strip()
             if cleaned_response.startswith('json'):
-                cleaned_response = cleaned_response[4:].strip()
+                cleaned_response = cleaned_response[len("json"):].strip()
 
             parsed_response = json.loads(cleaned_response)
             summary = parsed_response
@@ -107,36 +113,42 @@ class SummarizerAgent:
         if "error" in summary:
             return "Error generating summary."
 
-        parts = []
-        if summary.get("event_details"):
-            parts.append(f"**Event Details:**\n{summary['event_details']}\n")
+        parts: List[str] = []
+        def append_if_present(key: str, title: str):
+            value = summary.get(key)
+            if value:
+                if isinstance(value, list): # For references
+                    if value: # If list is not empty
+                        parts.append(f"**{title}:**\n" + "\n".join(f"- {item}" for item in value))
+                else: # For string values
+                     parts.append(f"**{title}:**\n{value}")
+            parts.append("\n")
 
-        if summary.get("forecast"):
-            parts.append(f"**Forecast:**\n{summary['forecast']}\n")
+        append_if_present("event_details", "Event Details")
+        append_if_present("forecast", "Forecast")
+        append_if_present("history", "Previous Report Recap")
+        append_if_present("significance", "Why This Matters")
+        append_if_present("latest_news", "Latest Developments")
+        append_if_present("etfs", "ETFs to Watch")
+        append_if_present("references", "References")
 
-        if summary.get("history"):
-            parts.append(f"**Previous Report Recap:**\n{summary['history']}\n")
-
-        if summary.get("significance"):
-            parts.append(f"**Why This Matters:**\n{summary['significance']}\n")
-
-        if summary.get("latest_news"):
-            parts.append(f"**Latest Developments:**\n{summary['latest_news']}\n")
-
-        if summary.get("etfs"):
-            parts.append(f"**ETFs to lookout:**\n{summary['etfs']}\n")
-
-        if summary.get("references"):
-            ref_list = "\n".join(summary["references"])
-            parts.append(f"**References:**\n{ref_list}\n")
-
-        return "\n".join(parts)
+        return "\n".join(parts).strip()
 
     def execute(self, state: GlobalState) -> GlobalState:
         logger.info("SummarizerAgent: Starting execution.")
 
+        if not state.current_event or not state.current_event.name:
+            logger.error("SummarizerAgent: Cannot execute, current_event is not set or has no name.")
+            # TODO: BETTER TO STOP HERE
+            return state
+
         prompt = self.build_prompt(state)
         response = self.ask_llm(prompt)
+        if not response:
+            logger.warning("SummarizerAgent: No response from LLM for summary generation. Setting error summary.")
+            state.current_event.summary = "Error: No response from LLM during summary generation."
+            return state
+
         logger.info(f"SummarizerAgent: LLM response: {response}")
 
         self.trace("assistant", response)

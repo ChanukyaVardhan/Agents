@@ -1,13 +1,13 @@
-from state import GlobalState, SearchQueryResult
+from state import GlobalState, SearchQueryResult, Event
 from dotenv import load_dotenv
 from firecrawl import FirecrawlApp
 from langchain_community.tools import DuckDuckGoSearchResults
+from llm import LLMClient
 from pydantic import BaseModel, Field
-from typing import List, Dict
+from typing import List, Dict, Optional
 from utils import write_to_file
 from utils import logger
 import json
-import llm
 import os
 
 load_dotenv()
@@ -40,28 +40,32 @@ Return only the **top 5 URLs** in JSON format. Make sure it is a valid JSON form
 """
 
 class Message(BaseModel):
-    role: str = Field(..., description="The role of the message sender.")
+    role: str = Field(..., description="The role of the message sender (e.g., 'user', 'assistant').")
     content: str = Field(..., description="The content of the message.")
 
 
 class SearchAgent:
     def __init__(self, output_trace_path: str):
         self.output_trace_path = output_trace_path
+        self.search = DuckDuckGoSearchResults(output_format="json", max_results=10) # Reduced from 20
 
-        self.search = DuckDuckGoSearchResults(output_format="json", num_results=20)
-
+        if not FIRE_CRAWL_API:
+            logger.error("FIRE_CRAWL_API key not found in environment variables.")
+            raise ValueError("FIRE_CRAWL_API key is required for SearchAgent.")
+        
         self.firecrawl_app = FirecrawlApp(api_key=FIRE_CRAWL_API)
+        self.llm_client = LLMClient()
 
     def trace(self, role: str, content: str) -> None:
         write_to_file(path=self.output_trace_path, content=f"{role}: {content}\n")
 
-    def ask_llm(self, prompt: str) -> str:
+    def ask_llm(self, prompt: str) -> Optional[str]:
         self.trace("user", prompt)
 
         contents = [Message(role='user', content=prompt)]
-        response = llm.response(contents)
+        response = self.llm_client.get_response(contents)
 
-        return str(response) if response else "No response from LLM"
+        return response
 
     def build_prompt(self, state: GlobalState) -> str:
         event_name = state.current_event.name
@@ -84,7 +88,8 @@ class SearchAgent:
         try:
             cleaned = response.strip().strip('`').strip()
             if cleaned.startswith("json"):
-                cleaned = cleaned[4:].strip()
+                cleaned = cleaned[len("json"):].strip()
+
             parsed = json.loads(cleaned)
             return parsed.get("top_urls", [])
         except Exception as e:
@@ -98,27 +103,48 @@ class SearchAgent:
         search_str = f"{state.current_event.name} forecast"
         
         logger.info(f"SearchAgent: Executing search query for - {search_str}")
-        search_query_results_json = json.loads(self.search.invoke(search_str))
-        search_query_results = [
-            SearchQueryResult(
-                title=item.get("title", ""),
-                link=item.get("link", ""),
-                snippet=item.get("snippet", "")
-            )
-            for item in search_query_results_json
-        ]
+        try:
+            search_query_results_json = json.loads(self.search.invoke(search_str))
+            search_query_results = [
+                SearchQueryResult(
+                    title=item.get("title", ""),
+                    link=item.get("link", ""),
+                    snippet=item.get("snippet", "")
+                )
+                for item in search_query_results_json
+            ]
 
-        logger.info(f"SearchAgent: Search query results - {search_query_results}")
+            logger.info(f"SearchAgent: Search query results - {search_query_results}")
 
-        state.current_event.search_query_results = search_query_results
+            state.current_event.search_query_results = search_query_results
+        except Exception as e:
+            logger.error(f"SearchAgent: Failed to execute search: {e}.")
+
+        return state
 
     def execute(self, state: GlobalState) -> GlobalState:
         logger.info("SearchAgent: Starting execution.")
 
+        if not state.current_event or not state.current_event.name:
+            logger.error("SearchAgent: Cannot execute, current_event is not set or has no name.")
+            # TODO: BETTER TO STOP HERE
+            return state
+
         self.execute_search(state)
+
+        # Check if search results were found before building prompt
+        if not state.current_event.search_query_results:
+            logger.warning("SearchAgent: No search results found for the current event.")
+            # TODO: BETTER TO STOP HERE
+            return state
 
         prompt = self.build_prompt(state)
         response = self.ask_llm(prompt)
+        if not response:
+            logger.warning("SearchAgent: No response from LLM to select top urls.")
+            # TODO: BETTER TO STOP HERE
+            return state
+
         logger.info(f"SearchAgent: LLM response: {response}")
 
         self.trace("assistant", response)
@@ -126,6 +152,11 @@ class SearchAgent:
         # TODO: Handle ordering of the urls.
         # TODO: Check the loop is doing only for 5 urls.
         top_urls = self.parse_top_urls(response)
+        if len(top_urls) == 0:
+            logger.warning("SearchAgent: No top URLs parsed from LLM response. No content will be scraped.")
+            # TODO: BETTER TO STOP HERE
+            return state
+
         for search_result in state.current_event.search_query_results:
             if search_result.link in top_urls:
                 search_result.is_top_result = True
