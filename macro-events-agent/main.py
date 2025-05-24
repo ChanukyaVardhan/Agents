@@ -70,10 +70,48 @@ if __name__ == "__main__":
     builder.add_node("search_agent", search_node)
     builder.add_node("summarizer_agent", summarizer_node)
 
+    def should_continue_node(state: GlobalState) -> GlobalState:
+        logger.info(f"should_continue_node: current_event_index: {state.current_event_index}, upcoming_events_count: {len(state.upcoming_events)}")
+        if state.upcoming_events and state.current_event_index < len(state.upcoming_events):
+            state.current_event = state.upcoming_events[state.current_event_index]
+
+            logger.info(f"should_continue_node: Selecting event '{state.current_event.name}' (index {state.current_event_index}) for processing.")
+            state.current_event_index += 1
+        else:
+            logger.info("should_continue_node: All events processed or no more events to process.")
+            state.current_event = None # Clear current_event when no more upcomingevents
+
+        return state
+    builder.add_node("should_continue", should_continue_node)
+
+    def create_calendar_event_node(state: GlobalState) -> GlobalState:
+        logger.info(f"create_calendar_event_node: current_event name '{state.current_event.name}'")
+        # TODO: Handle errors here
+        new_event = calendar_service.create_event(
+            state.current_event.name,
+            state.current_event.summary if state.current_event.summary is not None else "Meeting prep not available for this event.",
+            state.current_event.date,
+            add_7_am_notifications=True
+        )
+        # logger.info(f"create_calendar_event_node: Successfully created calendar event for: {new_event.get("name")}")
+        pprint.pprint(new_event)
+
+        return state
+    builder.add_node("create_calendar_event", create_calendar_event_node)
+
     builder.set_entry_point("events_agent")
-    builder.add_edge("events_agent", "search_agent")
+    builder.add_edge("events_agent", "should_continue")
+    builder.add_conditional_edges(
+        source="should_continue",
+        path=lambda x: "continue" if x.upcoming_events and x.current_event is not None else "end",
+        path_map={
+            "continue": "search_agent",
+            "end": END
+        }
+    )
     builder.add_edge("search_agent", "summarizer_agent")
-    builder.add_edge("summarizer_agent", END)
+    builder.add_edge("summarizer_agent", "create_calendar_event")
+    builder.add_edge("create_calendar_event", "should_continue")
 
     graph = builder.compile()
     logger.info("LangGraph state machine built successfully.")
@@ -95,14 +133,14 @@ if __name__ == "__main__":
         )
     final_state = graph.invoke(initial_state)
 
-    current_event = final_state["current_event"]
-    if current_event:
-        new_event = calendar_service.create_event(
-            current_event.name,
-            current_event.summary if current_event.summary is not None else "Meeting prep not available for this event.",
-            current_event.date,
-            add_7_am_notifications=True
-        )
-        pprint.pprint(new_event)
+    # current_event = final_state["current_event"]
+    # if current_event:
+    #     new_event = calendar_service.create_event(
+    #         current_event.name,
+    #         current_event.summary if current_event.summary is not None else "Meeting prep not available for this event.",
+    #         current_event.date,
+    #         add_7_am_notifications=True
+    #     )
+    #     pprint.pprint(new_event)
 
     logger.info("Macro Events Agent finished.")

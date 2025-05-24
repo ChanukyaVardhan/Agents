@@ -101,7 +101,7 @@ class SummarizerAgent:
             if cleaned_response.startswith('json'):
                 cleaned_response = cleaned_response[len("json"):].strip()
 
-            parsed_response = json.loads(cleaned_response)
+            parsed_response = json.loads(cleaned_response, strict=False)
             summary = parsed_response
 
             return summary

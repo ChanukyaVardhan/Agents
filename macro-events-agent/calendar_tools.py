@@ -26,6 +26,7 @@ class GoogleCalendar:
         timezone: Optional[str] = None
     ):
         try:
+            creds = None
             if os.path.exists(token_path):
                 creds = Credentials.from_authorized_user_file(token_path, self.SCOPES)
 

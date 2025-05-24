@@ -90,7 +90,7 @@ class SearchAgent:
             if cleaned.startswith("json"):
                 cleaned = cleaned[len("json"):].strip()
 
-            parsed = json.loads(cleaned)
+            parsed = json.loads(cleaned, strict=False)
             return parsed.get("top_urls", [])
         except Exception as e:
             # TODO: raise error here
@@ -104,7 +104,7 @@ class SearchAgent:
         
         logger.info(f"SearchAgent: Executing search query for - {search_str}")
         try:
-            search_query_results_json = json.loads(self.search.invoke(search_str))
+            search_query_results_json = json.loads(self.search.invoke(search_str), strict=False)
             search_query_results = [
                 SearchQueryResult(
                     title=item.get("title", ""),

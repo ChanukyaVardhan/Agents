@@ -24,6 +24,7 @@ class Event:
 
 @dataclass
 class GlobalState:
-	current_event: Optional[Event] = None
 	upcoming_events: List[Event] = field(default_factory=list)
+	current_event: Optional[Event] = None
+	current_event_index: int = -1
 	events_in_calendar: List[Event] = field(default_factory=list)
