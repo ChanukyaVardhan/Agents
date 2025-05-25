@@ -11,92 +11,102 @@ import tools as t
 PROMPT = """
 You are a Data Agent in a multi-agent NBA sportsbook system.
 
-Your role is to examine the user's query and determine what data is required to fulfill it. You have access to a shared state that may already contain some data. Your task is to identify any missing data and use the appropriate tools to load only the missing parts.
+Your role is to examine the user's query and determine what data is required to fulfill it.
+You have access to a shared state that may already contain some data.
+Your task is to identify any missing data and use the appropriate tools to load only the missing parts.
 
 Query: {query}
 
 Current known data in memory (state): {current_state}
 
-Previous reasoning steps and observations: {history}
+Previous reasoning steps and observations (if any, this is your scratchpad):
+{history}
 
-Available tools: {tools}
+Available tools:
+{tools}
 
 Instructions:
-1. Determine data required to fulfill the query.
+1. Determine data required to fulfill the query based on the query and current state.
 2. Compare that with the current state to identify missing data.
-3. Use tools to load only the missing data.
-4. Tools always take keyword arguments or no arguments. Structure of the inputs is already provided in the available tools. Respect the input format strictly, don't add comments in the arguments.
-5. If all required data is already available, pass control to the next agent.
+3. If data is missing, select a tool to load it.
+4. Tools always take keyword arguments or no arguments. The structure of the inputs
+   is already provided in the available tools description. Respect the input format
+   strictly; do not add comments in the arguments.
+5. If all required data is already available in the current state, you must respond
+   with an "answer" indicating data is ready.
+6. Your primary goal is to ensure all necessary data is loaded into the state. Do not attempt to answer the user's query directly or perform analysis.
+7. If user asks for specific players, only load stats for those players.
 
 Respond only in this JSON format:
 
 If you need to use a tool:
 {{
-    "thought": "What data is missing and why this tool is needed.",
+    "thought": "Describe your reasoning: what data is missing, why this specific tool is needed, and what parameters you'll use.",
     "action": {{
         "name": "Tool name (e.g., load_upcoming_nba_games_and_bets)",
-        "reason": "Why this tool is necessary now",
-        "input": "Explicit input the tool needs, if any"
+        "reason": "Briefly explain why this tool is necessary now.",
+        "input": {{ "param_name": "value" }} # Or an empty object if no input is needed.
     }}
 }}
 
 If no more data is needed:
 {{
-    "thought": "Why the data is now complete",
+    "thought": "Explain why you believe all necessary data is now available in the state.",
     "answer": "Data is ready. Pass to the next agent."
 }}
 
 Guidelines:
-- Never provide final analysis or betting insights.
+- Never provide final analysis or betting insights. Your role is data acquisition.
 - Only focus on determining and acquiring required data.
-- Avoid redundant tool calls for already available data.
-- Make decisions solely based on the current query and what’s missing in state.
+- Avoid redundant tool calls for data already present in the `current_state`.
+- Make decisions solely based on the current query and what’s missing in `current_state`.
+- If a tool call fails or the LLM response is malformed, you will be prompted to try again.
+  Use the history to understand previous attempts and avoid repeating mistakes.
 """
 
 
 class Message(BaseModel):
-    role: str = Field(..., description="The role of the message sender.")
+    role: str = Field(..., description="The role of the message sender (e.g., 'user', 'assistant').")
     content: str = Field(..., description="The content of the message.")
 
 
 class DataAgent:
 
-    def __init__(self, output_trace_path: str):
+    def __init__(self, output_trace_path: str, max_iterations: int = 5):
         self.tools: Dict[str, Tool]
         self.messages: List[Message] = []
         self.query = ""
 
-        self.max_iterations = 5
+        self.max_iterations = max_iterations
         self.current_iteration = 0
+        self.output_trace_path = output_trace_path
+        self.llm_client = LLMClient()
 
         self.load_tools()
-
         self.template = self.load_template()
         self.tool_descriptions = self.load_tool_descriptions()
 
-        self.output_trace_path = output_trace_path
-
-        self.llm_client = LLMClient()
+        logger.info(f"DataAgent initialized with max_iterations: {self.max_iterations}")
 
     def load_tools(self):
         self.tools: Dict[str, Tool] = {
             "LOAD_UPCOMING_NBA_GAMES_AND_BETS": Tool(
                 name="load_upcoming_nba_games_and_bets",
                 func=t.load_upcoming_nba_games_and_bets,
-                tool_description="Loads all upcoming NBA games with their team IDs, names, and player IDs, names; and sportsbook bets with bet event id, team names, player names and bet markets.",
+                tool_description="Loads all upcoming NBA games with their team IDs, names, and player IDs, names; and sportsbook bets with bet event id, team names, player names and bet markets. Use this tool to get an overview of available games and betting markets.",
                 tool_inputs={},  # no inputs
                 tool_outputs="(Dict[nba_game_id, Dict[NBATeamInfo, List[NBAPlayerInfo]]], Dict[bet_event_id, BetEvent])"
             ),
             "LOAD_PLAYERS_STATS": Tool(
                 name="load_players_stats",
                 func=t.load_players_stats,
-                tool_description="Loads NBA players stats for the given list of player IDs. Note the player ids are the ids from NBA website and not names from the Odds API",
-                tool_inputs={
-                    "player_ids": ["player_id_1", "player_id_2", "player_id_n"]
-                },
-                tool_outputs="Dict[str, PlayerStats]"  # TODO: Check this part
+                tool_description="Loads NBA players stats for a given list of player IDs. Note: the player_ids are the unique identifiers from the NBA website/API, not player names from the Odds API. You typically use this tool after identifying relevant players from game and bet information.",
+                tool_inputs={"player_ids": ["player_id_1", "player_id_2", "player_id_n"]},
+                tool_outputs="Dict[str, PlayerStats]"
             )
         }
+
+        logger.info(f"DataAgent tools loaded: {', '.join(self.tools.keys())}")
 
     def load_template(self) -> str:
         return PROMPT

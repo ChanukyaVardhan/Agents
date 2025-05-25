@@ -71,7 +71,7 @@ Each entry includes an event_id, teams, and player names.
 """
 
 class Message(BaseModel):
-    role: str = Field(..., description="The role of the message sender.")
+    role: str = Field(..., description="The role of the message sender (e.g., 'user', 'assistant').")
     content: str = Field(..., description="The content of the message.")
 
 
