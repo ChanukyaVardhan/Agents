@@ -1,0 +1,11 @@
+langchain
+langchain-community
+langchain-core
+langchain-openai
+langgraph
+nba-api
+numpy
+openai
+pandas
+pickle
+python-dotenv

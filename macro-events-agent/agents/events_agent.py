@@ -61,7 +61,7 @@ class EventsAgent:
             raise ValueError("FIRE_CRAWL_API key is required for EventsAgent.")
 
         self.firecrawl_app = FirecrawlApp(api_key=FIRE_CRAWL_API)
-        self.llm_client: LLMClient = LLMClient()
+        self.llm_client = LLMClient()
 
     def trace(self, role: str, content: str) -> None:
         write_to_file(path=self.output_trace_path, content=f"{role}: {content}\n")
