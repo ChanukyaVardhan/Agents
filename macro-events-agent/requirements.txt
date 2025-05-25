@@ -1,1 +1,13 @@
+duckduckgo-search
+firecrawl-py
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+langchain
+langchain-community
+langchain-core
+langchain-openai
+langgraph
+openai
+pandas
 python-dotenv
