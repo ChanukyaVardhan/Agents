@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Macro Events Agent is an LLM AI Agent application designed to help users stay informed about upcoming macroeconomic events. It automatically fetches event data from online economic calendars, identifies important events, searches for relevant news and analysis, generates concise summaries, and creates Google Calendar entries with this preparatory information.
+The Macro Events Agent is an LLM powered AI Agent application designed to help users stay informed about upcoming macroeconomic events. It automatically fetches event data from online economic calendars, identifies important events, searches for relevant news and analysis, generates concise summaries, and creates Google Calendar entries with this preparatory information.
 
 This allows users to be well-prepared for significant market-moving events.
 
